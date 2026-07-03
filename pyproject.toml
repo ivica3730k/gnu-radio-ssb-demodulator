@@ -1,0 +1,41 @@
+[tool.poetry]
+name = "gnu-radio-ssb-demodulator"
+version = "0.0.0"
+description = "RTL-SDR single sideband demodulator with GNU Radio."
+authors = ["Ivica"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+
+[tool.poetry.group.dev.dependencies]
+black = "26.3.1"
+isort = "8.0.1"
+pre-commit = "4.6.0"
+pytest = "9.0.3"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 120
+target-version = ["py310"]
+include = '\.pyi?$'
+exclude = '''
+/(
+  \.git
+  | \.venv
+  | build
+  | venv
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 120
+multi_line_output = 3
+include_trailing_comma = true
+
