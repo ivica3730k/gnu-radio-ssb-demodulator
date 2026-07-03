@@ -66,7 +66,8 @@ class CoreConfigSchema(BaseModel):
                     normalized_receivers.append(receiver)
                     continue
                 normalized_receiver = dict(receiver)
-                for frequency_field in ("dial_frequency", "bpf_low", "bpf_high"):
+                # Transverter offset shifts tuned frequencies, not audio band-pass edges.
+                for frequency_field in ("dial_frequency",):
                     field_value = normalized_receiver.get(frequency_field)
                     if isinstance(field_value, int):
                         normalized_receiver[frequency_field] = field_value + transverter_offset
