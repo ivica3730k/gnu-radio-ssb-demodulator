@@ -5,153 +5,87 @@ import argparse
 import logging
 import threading
 
-import numpy as np
 import osmosdr
-from gnuradio import analog, audio, blocks, filter, gr
-from gnuradio.filter import firdes
 
-log = logging.getLogger("rx")
+from gnu_radio_ssb_demodulator.ssb_rx_factory import build_ssb_rx
 
-SAMP_RATE = 1_800_000
-DECIM = 36
-IF_RATE = SAMP_RATE // DECIM
-AUDIO_RATE = 48_000
-PEAK_WARN = 0.8
-
-
-class PeakProbe(gr.sync_block):
-    def __init__(self):
-        gr.sync_block.__init__(self, name="peak_probe", in_sig=[np.float32], out_sig=None)
-        self._peak = 0.0
-        self._lock = threading.Lock()
-
-    def work(self, input_items, output_items):
-        x = input_items[0]
-        if len(x):
-            m = float(np.max(np.abs(x)))
-            with self._lock:
-                if m > self._peak:
-                    self._peak = m
-        return len(x)
-
-    def read_and_reset(self):
-        with self._lock:
-            p, self._peak = self._peak, 0.0
-        return p
+logger = logging.getLogger("rx")
+PEAK_WARNING_THRESHOLD = 0.8
 
 
 class LevelLogger(threading.Thread):
-    def __init__(self, probe, period=1.0, warn=PEAK_WARN):
+    def __init__(self, peak_probe, polling_period_seconds=1.0, warning_threshold=PEAK_WARNING_THRESHOLD):
         super().__init__(daemon=True)
-        self.probe, self.period, self.warn = probe, period, warn
-        self._stop = threading.Event()
+        self.peak_probe = peak_probe
+        self.polling_period_seconds = polling_period_seconds
+        self.warning_threshold = warning_threshold
+        self._stop_event = threading.Event()
 
     def run(self):
-        while not self._stop.wait(self.period):
-            peak = self.probe.read_and_reset()
-            if peak >= self.warn:
-                log.warning("peak amplitude %.3f >= %.2f - approaching clip", peak, self.warn)
+        while not self._stop_event.wait(self.polling_period_seconds):
+            peak_amplitude = self.peak_probe.read_and_reset()
+            if peak_amplitude >= self.warning_threshold:
+                logger.warning("peak amplitude %.3f >= %.2f - approaching clip", peak_amplitude, self.warning_threshold)
             else:
-                log.info("peak amplitude %.3f", peak)
+                logger.info("peak amplitude %.3f", peak_amplitude)
 
     def stop(self):
-        self._stop.set()
-
-
-class SsbRx(gr.top_block):
-    def __init__(self, mode, hw_freq, dial_freq, bpf_low, bpf_high, volume, gain, bias, audio_dev, ppm, agc):
-        gr.top_block.__init__(self, "SSB RX")
-
-        offset = dial_freq - hw_freq
-
-        dev_args = "rtl=0" + (",bias=1" if bias else "")
-        self.src = osmosdr.source(args=dev_args)
-        self.src.set_sample_rate(SAMP_RATE)
-        self.src.set_center_freq(hw_freq, 0)
-        self.src.set_gain_mode(False, 0)
-        self.src.set_gain(gain, 0)
-        self.src.set_freq_corr(ppm, 0)
-        self.src.set_iq_balance_mode(2, 0)
-        self.src.set_dc_offset_mode(2, 0)
-
-        chan_taps = firdes.low_pass(1.0, SAMP_RATE, 6_000, 4_000)
-        self.xlate = filter.freq_xlating_fir_filter_ccc(DECIM, chan_taps, offset, SAMP_RATE)
-
-        lo, hi = (bpf_low, bpf_high) if mode == "usb" else (-bpf_high, -bpf_low)
-        sb_taps = firdes.complex_band_pass(1.0, IF_RATE, lo, hi, 200)
-        self.sbfilt = filter.fir_filter_ccc(1, sb_taps)
-
-        if agc:
-            self.agc = analog.agc2_cc(5.0, 1e-3, 0.5, 1.0)  # attack, decay, ref, gain
-            self.agc.set_max_gain(120)
-            self.limit = analog.rail_ff(-0.9, 0.9)
-        else:
-            self.agc = blocks.multiply_const_cc(1.0)
-            self.limit = blocks.multiply_const_ff(1.0)
-
-        self.c2r = blocks.complex_to_real(1)
-        self.resamp = filter.rational_resampler_fff(interpolation=24, decimation=25)
-        self.vol = blocks.multiply_const_ff(volume / 100.0)
-
-        dev = f"pulse:{audio_dev}" if audio_dev not in ("", "pulse", "default") else "pulse"
-        self.sink = audio.sink(AUDIO_RATE, dev, True)
-        self.peak = PeakProbe()
-
-        self.connect(
-            self.src, self.xlate, self.sbfilt, self.agc, self.c2r, self.resamp, self.limit, self.vol, self.sink
-        )
-        self.connect(self.vol, self.peak)
+        self._stop_event.set()
 
 
 def main():
-    ap = argparse.ArgumentParser(description="SSB receiver from an RTL-SDR (direct)")
-    ap.add_argument("--mode", choices=["usb", "lsb"], default="usb")
-    ap.add_argument("--hardware-frequency", type=int, required=True, dest="hw_freq")
-    ap.add_argument("--dial-frequency", type=int, required=True, dest="dial_freq")
-    ap.add_argument("--bpf-low", type=int, default=200)
-    ap.add_argument("--bpf-high", type=int, default=3000)
-    ap.add_argument("--volume", type=float, default=80.0, help="0 to 100 percent")
-    ap.add_argument("--gain", type=float, default=30.0, help="RF gain in dB")
-    ap.add_argument("--ppm", type=int, default=14)
-    ap.add_argument("--agc", action="store_true")
-    ap.add_argument("--bias-t", action="store_true", dest="bias")
-    ap.add_argument("--audio-output-device", default="pulse", dest="audio_dev")
-    args = ap.parse_args()
+    argument_parser = argparse.ArgumentParser(description="SSB receiver from an RTL-SDR (direct)")
+    argument_parser.add_argument("--mode", choices=["usb", "lsb"], default="usb", dest="sideband_mode")
+    argument_parser.add_argument("--hardware-frequency", type=int, required=True, dest="hardware_frequency_hz")
+    argument_parser.add_argument("--dial-frequency", type=int, required=True, dest="dial_frequency_hz")
+    argument_parser.add_argument("--bpf-low", type=int, default=200, dest="bandpass_low_hz")
+    argument_parser.add_argument("--bpf-high", type=int, default=3000, dest="bandpass_high_hz")
+    argument_parser.add_argument(
+        "--volume", type=float, default=80.0, help="0 to 100 percent", dest="output_volume_percent"
+    )
+    argument_parser.add_argument("--gain", type=float, default=30.0, help="RF gain in dB", dest="rf_gain_db")
+    argument_parser.add_argument("--ppm", type=int, default=14, dest="frequency_correction_ppm")
+    argument_parser.add_argument("--agc", action="store_true", dest="agc_enabled")
+    argument_parser.add_argument("--bias-t", action="store_true", dest="bias_tee_enabled")
+    argument_parser.add_argument("--audio-output-device", default="pulse", dest="audio_output_device")
+    parsed_arguments = argument_parser.parse_args()
 
-    if not 0.0 <= args.volume <= 100.0:
-        ap.error("--volume must be between 0 and 100")
+    if not 0.0 <= parsed_arguments.output_volume_percent <= 100.0:
+        argument_parser.error("--volume must be between 0 and 100")
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
-    global log
-    log = logging.getLogger(f"rx.{args.dial_freq}")
+    global logger
+    logger = logging.getLogger(f"rx.{parsed_arguments.dial_frequency_hz}")
 
-    tb = SsbRx(
-        args.mode,
-        args.hw_freq,
-        args.dial_freq,
-        args.bpf_low,
-        args.bpf_high,
-        args.volume,
-        args.gain,
-        args.bias,
-        args.audio_dev,
-        args.ppm,
-        args.agc,
+    device_arguments = "rtl=0" + (",bias=1" if parsed_arguments.bias_tee_enabled else "")
+    iq_source = osmosdr.source(args=device_arguments)
+    top_block = build_ssb_rx(
+        iq_source,
+        parsed_arguments.sideband_mode,
+        parsed_arguments.hardware_frequency_hz,
+        parsed_arguments.dial_frequency_hz,
+        parsed_arguments.bandpass_low_hz,
+        parsed_arguments.bandpass_high_hz,
+        parsed_arguments.output_volume_percent,
+        parsed_arguments.rf_gain_db,
+        parsed_arguments.audio_output_device,
+        parsed_arguments.frequency_correction_ppm,
+        parsed_arguments.agc_enabled,
     )
-    tb.start()
-    lvl = LevelLogger(tb.peak)
-    lvl.start()
+    top_block.start()
+    level_logger = LevelLogger(top_block.peak_probe)
+    level_logger.start()
     try:
-        tb.wait()
+        top_block.wait()
     except KeyboardInterrupt:
         pass
     finally:
-        lvl.stop()
-        tb.stop()
-        tb.wait()
+        level_logger.stop()
+        top_block.stop()
+        top_block.wait()
 
 
 if __name__ == "__main__":
