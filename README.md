@@ -49,7 +49,7 @@ python3 -m venv --system-site-packages .venv
 ## Run
 
 ```bash
-python receiver.py \
+poetry run gnu-radio-ssb-demodulator \
   --hardware-frequency 7000000 \
   --dial-frequency 7074000 \
   --mode usb \
@@ -100,7 +100,7 @@ named PulseAudio sink instead — e.g. a null sink a decoder reads from:
 
 ```bash
 pactl load-module module-null-sink sink_name=ft8 sink_properties=device.description=ft8
-python receiver.py ... --audio-output-device ft8
+poetry run gnu-radio-ssb-demodulator ... --audio-output-device ft8
 ```
 
 To listen to a named sink while it's also feeding something else, bridge its

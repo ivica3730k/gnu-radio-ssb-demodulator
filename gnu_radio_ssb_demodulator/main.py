@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """SSB receiver reading directly from an RTL-SDR, output to PulseAudio."""
+
 import argparse
 import logging
 import threading
 
 import numpy as np
-from gnuradio import gr, blocks, filter, audio, analog
-from gnuradio.filter import firdes
 import osmosdr
-
+from gnuradio import analog, audio, blocks, filter, gr
+from gnuradio.filter import firdes
 
 log = logging.getLogger("rx")
 
@@ -21,8 +21,7 @@ PEAK_WARN = 0.8
 
 class PeakProbe(gr.sync_block):
     def __init__(self):
-        gr.sync_block.__init__(self, name="peak_probe",
-                               in_sig=[np.float32], out_sig=None)
+        gr.sync_block.__init__(self, name="peak_probe", in_sig=[np.float32], out_sig=None)
         self._peak = 0.0
         self._lock = threading.Lock()
 
@@ -59,9 +58,8 @@ class LevelLogger(threading.Thread):
         self._stop.set()
 
 
-class ssb_rx(gr.top_block):
-    def __init__(self, mode, hw_freq, dial_freq, bpf_low, bpf_high, volume,
-                 gain, bias, audio_dev, ppm, agc):
+class SsbRx(gr.top_block):
+    def __init__(self, mode, hw_freq, dial_freq, bpf_low, bpf_high, volume, gain, bias, audio_dev, ppm, agc):
         gr.top_block.__init__(self, "SSB RX")
 
         offset = dial_freq - hw_freq
@@ -77,8 +75,7 @@ class ssb_rx(gr.top_block):
         self.src.set_dc_offset_mode(2, 0)
 
         chan_taps = firdes.low_pass(1.0, SAMP_RATE, 6_000, 4_000)
-        self.xlate = filter.freq_xlating_fir_filter_ccc(
-            DECIM, chan_taps, offset, SAMP_RATE)
+        self.xlate = filter.freq_xlating_fir_filter_ccc(DECIM, chan_taps, offset, SAMP_RATE)
 
         lo, hi = (bpf_low, bpf_high) if mode == "usb" else (-bpf_high, -bpf_low)
         sb_taps = firdes.complex_band_pass(1.0, IF_RATE, lo, hi, 200)
@@ -100,8 +97,9 @@ class ssb_rx(gr.top_block):
         self.sink = audio.sink(AUDIO_RATE, dev, True)
         self.peak = PeakProbe()
 
-        self.connect(self.src, self.xlate, self.sbfilt, self.agc,
-                     self.c2r, self.resamp, self.limit, self.vol, self.sink)
+        self.connect(
+            self.src, self.xlate, self.sbfilt, self.agc, self.c2r, self.resamp, self.limit, self.vol, self.sink
+        )
         self.connect(self.vol, self.peak)
 
 
@@ -130,9 +128,19 @@ def main():
     global log
     log = logging.getLogger(f"rx.{args.dial_freq}")
 
-    tb = ssb_rx(args.mode, args.hw_freq, args.dial_freq,
-                args.bpf_low, args.bpf_high, args.volume, args.gain, args.bias,
-                args.audio_dev, args.ppm, args.agc)
+    tb = SsbRx(
+        args.mode,
+        args.hw_freq,
+        args.dial_freq,
+        args.bpf_low,
+        args.bpf_high,
+        args.volume,
+        args.gain,
+        args.bias,
+        args.audio_dev,
+        args.ppm,
+        args.agc,
+    )
     tb.start()
     lvl = LevelLogger(tb.peak)
     lvl.start()
