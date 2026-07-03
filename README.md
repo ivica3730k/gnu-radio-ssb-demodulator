@@ -7,6 +7,9 @@ plays the audio to a PulseAudio sink. One process, no network, no GUI.
 Designed to run one instance per channel and to feed either your speakers or a
 named PulseAudio sink (e.g. for a downstream decoder).
 
+You can also run it in JSON config mode to open multiple receiver chains from
+one hardware capture.
+
 ## Signal chain
 
 ```
@@ -50,6 +53,8 @@ python3 -m venv --system-site-packages .venv
 
 ```bash
 poetry run gnu-radio-ssb-demodulator \
+  cli \
+  --rtl-index 0 \
   --hardware-frequency 7000000 \
   --dial-frequency 7074000 \
   --mode usb \
@@ -61,21 +66,88 @@ poetry run gnu-radio-ssb-demodulator \
   --bias-t
 ```
 
+Or run in JSON config mode (**exclusive**: no other receiver flags allowed):
+
+```bash
+poetry run gnu-radio-ssb-demodulator json --json-config-file ./config.json
+```
+
 ## Options
 
-| Flag | Default | Description |
+| Command/Flag | Default | Description |
 |------|---------|-------------|
+| `cli` | required mode | Single receiver configured by CLI flags. |
+| `json --json-config-file` | required in `json` mode | Load full config from JSON and open all configured receiver chains. |
 | `--hardware-frequency` | *required* | Frequency the SDR tunes to, in Hz. |
 | `--dial-frequency` | *required* | Channel to receive, in Hz. May be above or below the hardware frequency. |
 | `--mode` | `usb` | Sideband: `usb` or `lsb`. |
 | `--bpf-low` | `200` | Audio passband lower edge, Hz. |
 | `--bpf-high` | `3000` | Audio passband upper edge, Hz. |
 | `--gain` | `30` | RF/tuner gain in dB. Fixed — set once; use AGC for level, not this. |
+| `--rtl-index` | `0` | RTL-SDR device index for CLI mode. |
 | `--volume` | `80` | AF output level, 0–100 % of full scale. |
 | `--ppm` | `14` | Crystal frequency correction, in PPM. Tune per dongle. |
 | `--agc` | off | Enable AGC (see below). Omit for a flat, fixed-gain feed. |
 | `--bias-t` | off | Enable the ~4.5 V bias-T for an inline LNA / active antenna. |
 | `--audio-output-device` | `pulse` | PulseAudio sink name; `pulse`/`default` = the default sink. |
+
+### JSON config format
+
+`json --json-config-file` expects a core hardware block plus a `receivers` list.
+Sample rate is fixed internally at **1,800,000** and is not configurable.
+
+### 20m example: FT8 + FT4 + WSPR at the same time
+
+Hardware is tuned to **13,900 kHz** (`13900000` Hz) and three receiver chains are opened:
+- FT8: 14.074 MHz
+- FT4: 14.080 MHz
+- WSPR: 14.0956 MHz
+
+```json
+{
+  "rtl_index": 0,
+  "hardware_frequency": 13900000,
+  "transverter_offset": 50000000,
+  "gain": 10,
+  "ppm": 14,
+  "bias_t": true,
+  "receivers": [
+    {
+      "mode": "USB",
+      "dial_frequency": 14074000,
+      "bpf_low": 200,
+      "bpf_high": 3800,
+      "agc": true,
+      "pulse_audio_output_device": "ft8_20m",
+      "volume": 80
+    },
+    {
+      "mode": "USB",
+      "dial_frequency": 14080000,
+      "bpf_low": 200,
+      "bpf_high": 3000,
+      "agc": true,
+      "pulse_audio_output_device": "ft4_20m",
+      "volume": 80
+    },
+    {
+      "mode": "USB",
+      "dial_frequency": 14095600,
+      "bpf_low": 1200,
+      "bpf_high": 1800,
+      "agc": true,
+      "pulse_audio_output_device": "wspr_20m",
+      "volume": 80
+    }
+  ]
+}
+```
+
+Run it with:
+
+```bash
+poetry run gnu-radio-ssb-demodulator json --json-config-file ./config-20m.json
+```
 
 ## AGC vs. gain vs. volume
 
@@ -95,19 +167,20 @@ clean, linear feed to a decoder, leave it off and rely on fixed gain.
 
 ## Audio routing
 
-By default audio goes to the system default sink (your speakers). To route to a
-named PulseAudio sink instead — e.g. a null sink a decoder reads from:
+Create 3 virtual sinks (one per mode):
 
 ```bash
-pactl load-module module-null-sink sink_name=ft8 sink_properties=device.description=ft8
-poetry run gnu-radio-ssb-demodulator ... --audio-output-device ft8
+pactl load-module module-null-sink sink_name=ft8_20m sink_properties=device.description=ft8_20m
+pactl load-module module-null-sink sink_name=ft4_20m sink_properties=device.description=ft4_20m
+pactl load-module module-null-sink sink_name=wspr_20m sink_properties=device.description=wspr_20m
 ```
 
-To listen to a named sink while it's also feeding something else, bridge its
-monitor to your speakers:
+Optional: listen to each virtual sink while decoders read from it (loopback to default sink):
 
 ```bash
-pactl load-module module-loopback source=ft8.monitor sink=@DEFAULT_SINK@ latency_msec=1 adjust_time=0
+pactl load-module module-loopback source=ft8_20m.monitor sink=@default_sink@ latency_msec=1 adjust_time=0
+pactl load-module module-loopback source=ft4_20m.monitor sink=@default_sink@ latency_msec=1 adjust_time=0
+pactl load-module module-loopback source=wspr_20m.monitor sink=@default_sink@ latency_msec=1 adjust_time=0
 ```
 
 ## Monitoring
@@ -124,6 +197,3 @@ level.
   `--dial-frequency 7074000`. With a 50 MHz upconverter, add 50 MHz to both.
 - **Capture width:** the dial must fall within ±900 kHz of the hardware frequency
   (the 1.8 MHz capture). Channels further apart need a separate hardware tune.
-- **`[R82XX] PLL not locked!`** at startup is a benign tuner message near the
-  low edge of the R820T's range; ignore it if audio flows.
-  

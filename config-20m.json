@@ -1,0 +1,37 @@
+{
+  "rtl_index": 0,
+  "hardware_frequency": 13900000,
+  "transverter_offset": 50000000,
+  "gain": 10,
+  "ppm": 14,
+  "bias_t": true,
+  "receivers": [
+    {
+      "mode": "USB",
+      "dial_frequency": 14074000,
+      "bpf_low": 200,
+      "bpf_high": 3800,
+      "agc": true,
+      "pulse_audio_output_device": "ft8_20m",
+      "volume": 80
+    },
+    {
+      "mode": "USB",
+      "dial_frequency": 14080000,
+      "bpf_low": 200,
+      "bpf_high": 3000,
+      "agc": true,
+      "pulse_audio_output_device": "ft4_20m",
+      "volume": 80
+    },
+    {
+      "mode": "USB",
+      "dial_frequency": 14095600,
+      "bpf_low": 1200,
+      "bpf_high": 1800,
+      "agc": true,
+      "pulse_audio_output_device": "wspr_20m",
+      "volume": 80
+    }
+  ]
+}

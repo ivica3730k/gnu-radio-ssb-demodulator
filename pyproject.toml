@@ -7,6 +7,8 @@ packages = [{ include = "gnu_radio_ssb_demodulator" }]
 
 [tool.poetry.dependencies]
 python = "^3.10"
+pydantic = "^2.13.4"
+numpy = "^1.26.4"
 
 [tool.poetry.group.dev.dependencies]
 black = "26.3.1"
